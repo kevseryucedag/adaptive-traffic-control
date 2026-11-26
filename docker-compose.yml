@@ -1,0 +1,48 @@
+name: adaptive-traffic
+
+services:
+  # Kafka: tek düğüm, KRaft modu (Zookeeper gerekmez)
+  kafka:
+    image: ${KAFKA_IMAGE}
+    hostname: kafka
+    ports:
+      # Bilgisayarından test için: localhost:29092
+      - "${KAFKA_HOST_PORT}:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # 9092: container'lar arası, 29092: senin bilgisayarın, 9093: controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,PLAINTEXT_HOST://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:${KAFKA_HOST_PORT}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Tek düğüm olduğu için replikasyon 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Topic'ler sadece kafka-init ile, kontrollü oluşturulsun
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  # Kafka hazır olunca 3 topic'i oluşturup kapanan tek seferlik servis
+  kafka-init:
+    image: ${KAFKA_IMAGE}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic ${TOPIC_RAW} --partitions ${TOPIC_PARTITIONS} --replication-factor 1 &&
+       /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic ${TOPIC_INDICATORS} --partitions ${TOPIC_PARTITIONS} --replication-factor 1 &&
+       /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic ${TOPIC_DECISIONS} --partitions 1 --replication-factor 1 &&
+       echo '--- Topic listesi ---' &&
+       /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list"
+    restart: "no"
